@@ -1,0 +1,14 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 14  # Optional if you're not using Node
+  build:
+    commands:
+      - echo "No build step needed for static website"
+
+artifacts:
+  files:
+    - '**/*'
+  base-directory: .  # Change this if your site files are in a subfolder
