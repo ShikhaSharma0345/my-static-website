@@ -1,0 +1,225 @@
+Step-by-Step Instructions
+1. Create and Attach a Virtual Private Gateway (VGW)
+Go to VPC Dashboard → Virtual Private Gateways.
+Click Create Virtual Private Gateway.
+Name: e.g., Main-VGW
+Select the created VGW → Actions → Attach to VPC.
+Choose your target VPC.
+
+2. Create Two Customer Gateways (CGW)
+Repeat for each on-premises location:
+Go to VPC Dashboard → Customer Gateways.
+Click Create Customer Gateway.
+Name: e.g., OnPrem1-CGW, OnPrem2-CGW
+Routing: Static or Dynamic (BGP)
+IP Address: The public IP of your on-prem router/firewall ( elstic ip of ubuntu server for testing)
+BGP ASN: If using BGP
+
+3. Create Two Site-to-Site VPN Connections
+Repeat for each CGW:
+Go to VPN Connections → Create VPN Connection.
+Name: e.g., VPN-To-OnPrem1, VPN-To-OnPrem2
+Target Gateway Type: Virtual Private Gateway
+Virtual Private Gateway: Select the VGW
+Customer Gateway: Choose existing (select the corresponding CGW)
+Routing Options: Static or BGP (match what you selected earlier)
+After creation, download the VPN configuration file specific to your router/firewall model.
+
+ Step-by-Step: Configure VPN on Ubuntu EC2 Using strongSwan
+1. Install strongSwan
+sudo apt update
+sudo apt install strongswan strongswan-pki -y
+2. Review Your AWS VPN Configuration File
+Download the Generic Configuration from AWS Console → VPN Connections → Your Connection → "Download Configuration" 
+3. Edit IPsec Configuration
+File: /etc/ipsec.conf
+sudo vim /etc/ipsec.conf ( replace the content with configuration file update the file left - elastic ip , leftsubnet - customer vpc range , rightsubnet - aws vpc range)
+
+3. Edit /etc/ipsec.secrets
+sudo vim /etc/ipsec.secrets
+
+<YOUR_PUBLIC_IP> <AWS_TUNNEL1_OUTSIDE_IP> : PSK "PSK_FOR_TUNNEL_1"
+<YOUR_PUBLIC_IP> <AWS_TUNNEL2_OUTSIDE_IP> : PSK "PSK_FOR_TUNNEL_2"
+
+4. Enable IP forwarding
+echo "net.ipv4.ip_forward=1" | sudo tee -a /etc/sysctl.conf
+sudo sysctl -p
+
+5. Start strongSwan
+sudo ipsec restart
+sudo ipsec statusall
+sudo ipsec up aws-tunnel-1
+sudo ipsec up aws-tunnel-2
+
+# ipsec.conf - strongSwan IPsec configuration file
+
+# basic configuration
+
+config setup
+        charondebug="all"
+        uniqueids=yes
+        strictcrlpolicy=no
+conn Tunnel1
+        type=tunnel
+        auto=start
+        keyexchange=ikev2
+        authby=psk
+        leftid=3.108.208.184 (customer static ip)
+        leftsubnet= 10.0.0.0/20 (customer vpc)
+        right=15.206.23.116
+        rightsubnet= 11.11.0.0./24 (aws vpc)
+        aggressive=no
+        ikelifetime=28800s
+        lifetime=3600s
+        margintime=270s
+        rekey=yes
+        rekeyfuzz=100%
+        fragmentation=yes
+        replay_window=1024
+        dpddelay=30s
+        dpdtimeout=120s
+        dpdaction=restart
+        ike=aes128-sha1-modp1024
+        esp=aes128-sha1-modp1024
+        keyingtries=%forever
+
+        ## Please note the following line assumes you only have two tunnels in your Strongswan configuration file. This "mark" value must be unique and may need to be changed based on other entries in your configuration file.
+        mark=100
+
+        ## Uncomment the following line to utilize the script from the "Automated Tunnel Healhcheck and Failover" section. Ensure that the integer after "-m" matches the "mark" value above, and <VPC CIDR> is replaced with the CIDR of your VPC
+        ## (e.g. 192.168.1.0/24)
+        leftupdown="/etc/ipsec.d/aws-updown.sh -ln Tunnel1 -ll 169.254.253.214/30 -lr 169.254.253.213/30 -m 100 -r 11.11.0.0/24"
+
+conn Tunnel2
+        type=tunnel
+        auto=start
+        keyexchange=ikev2
+        authby=psk
+        leftid=3.108.208.184
+        leftsubnet= 10.0.0.0/20 (customer vpc )
+        right=52.66.71.36
+        rightsubnet= 11.11.0.0/24 (aws vpc)
+        aggressive=no
+        ikelifetime=28800s
+        lifetime=3600s
+        margintime=270s
+        rekey=yes
+        rekeyfuzz=100%
+        fragmentation=yes
+        replay_window=1024
+        dpddelay=30s
+        dpdtimeout=120s
+        dpdaction=restart
+        ike=aes128-sha1-modp1024
+        esp=aes128-sha1-modp1024
+        keyingtries=%forever
+
+        ## Please note the following line assumes you only have two tunnels in your Strongswan configuration file. This "mark" value must be unique and may need to be changed based on other entries in your configuration file.
+        mark=200
+
+        ## Uncomment the following line to utilize the script from the "Automated Tunnel Healhcheck and Failover" section. Ensure that the integer after "-m" matches the "mark" value above, and <VPC CIDR> is replaced with the CIDR of your VPC
+        ## (e.g. 192.168.1.0/24)
+        leftupdown="/etc/ipsec.d/aws-updown.sh -ln Tunnel2 -ll 169.254.147.2/30 -lr 169.254.147.1/30 -m 200 -r 11.11.0.0/24"
+
+root@ip-10-0-3-179:/etc/ipsec.d# cat aws-updown.sh 
+#!/bin/bash
+
+while [[ $# > 1 ]]; do
+        case ${1} in
+                -ln|--link-name)
+                        TUNNEL_NAME="${2}"
+                        TUNNEL_PHY_INTERFACE="${PLUTO_INTERFACE}"
+                        shift
+                        ;;
+                -ll|--link-local)
+                        TUNNEL_LOCAL_ADDRESS="${2}"
+                        TUNNEL_LOCAL_ENDPOINT="${PLUTO_ME}"
+                        shift
+                        ;;
+                -lr|--link-remote)
+                        TUNNEL_REMOTE_ADDRESS="${2}"
+                        TUNNEL_REMOTE_ENDPOINT="${PLUTO_PEER}"
+                        shift
+                        ;;
+                -m|--mark)
+                        TUNNEL_MARK="${2}"
+                        shift
+                        ;;
+                -r|--static-route)
+                        TUNNEL_STATIC_ROUTE="${2}"
+                        shift
+                        ;;
+                *)
+                        echo "${0}: Unknown argument \"${1}\"" >&2
+                        ;;
+        esac
+        shift
+done
+
+command_exists() {
+        type "$1" >&2 2>&2
+}
+
+create_interface() {
+        ip link add ${TUNNEL_NAME} type vti local ${TUNNEL_LOCAL_ENDPOINT} remote ${TUNNEL_REMOTE_ENDPOINT} key ${TUNNEL_MARK}
+        ip addr add ${TUNNEL_LOCAL_ADDRESS} remote ${TUNNEL_REMOTE_ADDRESS} dev ${TUNNEL_NAME}
+        ip link set ${TUNNEL_NAME} up mtu 1419
+}
+
+configure_sysctl() {
+        sysctl -w net.ipv4.ip_forward=1
+        sysctl -w net.ipv4.conf.${TUNNEL_NAME}.rp_filter=2
+        sysctl -w net.ipv4.conf.${TUNNEL_NAME}.disable_policy=1
+        sysctl -w net.ipv4.conf.${TUNNEL_PHY_INTERFACE}.disable_xfrm=1
+        sysctl -w net.ipv4.conf.${TUNNEL_PHY_INTERFACE}.disable_policy=1
+}
+
+add_route() {
+        IFS=',' read -ra route <<< "${TUNNEL_STATIC_ROUTE}"
+        for i in "${route[@]}"; do
+            ip route add ${i} dev ${TUNNEL_NAME} metric ${TUNNEL_MARK} src 10.0.3.179
+        done
+        iptables -t mangle -A FORWARD -o ${TUNNEL_NAME} -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+        iptables -t mangle -A INPUT -p esp -s ${TUNNEL_REMOTE_ENDPOINT} -d ${TUNNEL_LOCAL_ENDPOINT} -j MARK --set-xmark ${TUNNEL_MARK}
+        ip route flush table 220
+}
+
+cleanup() {
+        IFS=',' read -ra route <<< "${TUNNEL_STATIC_ROUTE}"
+        for i in "${route[@]}"; do
+            ip route del ${i} dev ${TUNNEL_NAME} metric ${TUNNEL_MARK}
+        done
+        iptables -t mangle -D FORWARD -o ${TUNNEL_NAME} -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+        iptables -t mangle -D INPUT -p esp -s ${TUNNEL_REMOTE_ENDPOINT} -d ${TUNNEL_LOCAL_ENDPOINT} -j MARK --set-xmark ${TUNNEL_MARK}
+        ip route flush cache
+}
+
+delete_interface() {
+        ip link set ${TUNNEL_NAME} down
+        ip link del ${TUNNEL_NAME}
+}
+
+# main execution starts here
+
+command_exists ip || echo "ERROR: ip command is required to execute the script, check if you are running as root, mostly to do with path, /sbin/" >&2 2>&2
+command_exists iptables || echo "ERROR: iptables command is required to execute the script, check if you are running as root, mostly to do with path, /sbin/" >&2 2>&2
+command_exists sysctl || echo "ERROR: sysctl command is required to execute the script, check if you are running as root, mostly to do with path, /sbin/" >&2 2>&2
+
+case "${PLUTO_VERB}" in
+        up-client)
+                create_interface
+                configure_sysctl
+                add_route
+                ;;
+        down-client)
+                cleanup
+                delete_interface
+                ;;
+esac
+
+add the static route in vpn connection i.e customer side vpc range 
+
+Restart strongSwan
+ipsec restart
+ipsec status
+ now at last ping aws ip (destination ec2 ip or vice-versa)
