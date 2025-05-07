@@ -5,7 +5,6 @@ Click Create Virtual Private Gateway.
 Name: e.g., Main-VGW
 Select the created VGW → Actions → Attach to VPC.
 Choose your target VPC.
-
 2. Create Two Customer Gateways (CGW)
 Repeat for each on-premises location:
 Go to VPC Dashboard → Customer Gateways.
